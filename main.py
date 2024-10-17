@@ -5,8 +5,9 @@ from datetime import datetime
 import random
 from dotenv import load_dotenv
 import os
+from keep_alive import keep_alive
 
-
+keep_alive()
 load_dotenv()
 intents = discord.Intents.default()
 intents.message_content = True  # Enable the intent for message content
