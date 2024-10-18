@@ -40,7 +40,7 @@ async def on_ready():
 # Command to handle word guessing
 @bot.command()
 async def guess(ctx, word):
-    global guesses_made,distance
+    global guesses_made,distance,GAME_NUMBER,hint
     api_url = f'https://api.contexto.me/machado/en/game/{GAME_NUMBER}/{word}'
     
     # Fetch data from the Contexto API
@@ -51,11 +51,15 @@ async def guess(ctx, word):
             distance = data['distance']
             guessed_word = data['word']
             guesses_made += 1  # Increment the guess counter
-            
+            if distance == 0 or distance == 1:
+                await ctx.send(f'You won')
+                GAME_NUMBER+= 1
+                hint = 0
+                await ctx.send(f'New word has been chosen. Hints are now available as well')
             # Send the response to the user
             await ctx.send(f'You guessed: **{guessed_word}**\nDistance: {distance}\n')
         else:
-            await ctx.send('Error fetching data from Contexto API.')
+            await ctx.send('Either u spelled it wrong or used foul word. very bad manners')
     except Exception as e:
         await ctx.send(f'An error occurred: {str(e)}')
 
@@ -144,9 +148,9 @@ async def guide(ctx):
         "Welcome to the Guess the word Game!\n\n"
         "**How to Play:**\n"
         "1. The game starts with a secret word that you must guess.\n"
-        "2. Use the `/guess <your_word>` command to make a guess.\n"
+        "2. Use the `!guess <your_word>` command to make a guess.\n"
         "3. After each guess, you'll receive feedback on how far away your guess is from the secret word.\n"
-        "4. You can also use the `/hint` command to receive a hint about the word.\n\n"
+        "4. You can also use the `!hint` command to receive a hint about the word.\n\n"
         "**Tips for Playing:**\n"
         "- Start with common words to get a sense of the distance.\n"
         "- Pay attention to the distance feedback to narrow down your guesses.\n"
