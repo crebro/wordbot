@@ -27,12 +27,6 @@ distance = None
 start_date = None
 
 
-# Function to check if the day has changed
-def check_new_day():
-    current_date = datetime.now().date()  # Get the current date
-    return current_date != start_date  # Compare with the start date
-
-
 @bot.event
 async def on_guild_join(guild):
     servers[guild.id] = {"notifications_channel": None}
@@ -41,7 +35,7 @@ async def on_guild_join(guild):
 # Event when the bot is ready
 @bot.event
 async def on_ready():
-    global start_date
+    global start_date, servers
     start_date = datetime.now().date()  # Initialize the start date
     print(f"Bot {bot.user.name} is ready!")
     for guild in bot.guilds:
@@ -52,12 +46,13 @@ async def on_ready():
 
 @bot.slash_command(name="set_channel", description="Set the notifications channel")
 async def set_channel(ctx: discord.ApplicationContext, channel: discord.TextChannel):
+    global servers
     if ctx.guild.id not in servers:
         servers[ctx.guild.id] = {
             "notifications_channel": channel.id,
         }
     else:
-        servers[ctx.guild.id]["notifications_channel"] = channel
+        servers[ctx.guild.id]["notifications_channel"] = channel.id
 
     await ctx.respond(f"Notifications channel set to {channel.mention}")
 
@@ -71,10 +66,10 @@ async def guess(
     ctx: discord.ApplicationContext,
     word: str,
 ):
+    global guesses_made, distance, GAME_NUMBER, hint, servers
     if ctx.guild_id not in servers:
         servers[ctx.guild_id] = {"notifications_channel": None}
 
-    global guesses_made, distance, GAME_NUMBER, hint
     api_url = f"https://api.contexto.me/machado/en/game/{GAME_NUMBER}/{word}"
 
     # Fetch data from the Contexto API
@@ -112,17 +107,19 @@ async def guess(
 # Command to request a hint
 @bot.slash_command(name="hint", description="Get a hint to help you guess the word")
 async def usehint(ctx: discord.ApplicationContext):
-    global hint_usage
+    global hint_usage, servers
     user_id = ctx.author.id
-    guild_id = ctx.guild_id()
+    guild_id = ctx.guild_id
 
     # Initialize hint usage for the user if not already done
     if user_id not in servers[guild_id]:
-        servers[guild_id][user_id] = 0
+        servers[guild_id][user_id] = {"hints": 0, "distance": None, "guesses_made": 0}
+    elif "hints" not in servers[guild_id][user_id]:
+        servers[guild_id][user_id]["hints"] = 0
 
     # Check if the user has exceeded the maximum number of hints
-    if servers[guild_id][user_id] >= MAX_HINTS:
-        await ctx.send(
+    if servers[guild_id][user_id]["hints"] >= MAX_HINTS:
+        await ctx.respond(
             f"Sorry {ctx.author.mention}, you have used all your hints for today!"
         )
         return
@@ -135,7 +132,7 @@ async def usehint(ctx: discord.ApplicationContext):
 
     # Check if distance is null - indicating the user has not guessed yet
     if distance is None or distance <= 0:
-        await ctx.send(
+        await ctx.respond(
             f"Please make a guess first before requesting a hint, {ctx.author.mention}."
         )
         return
@@ -154,7 +151,7 @@ async def usehint(ctx: discord.ApplicationContext):
         # Provides a hint that is between 10 and 50
         hint_distance = random.randint(10, 50)
     else:
-        await ctx.send(
+        await ctx.respond(
             f"You are too close to the answer, {ctx.author.mention}. No hint available."
         )
         return
@@ -169,12 +166,12 @@ async def usehint(ctx: discord.ApplicationContext):
         if hint_response.status_code == 200:
             hint_data = hint_response.json()
             hint_word = hint_data["word"]  # the API returns a field 'word'
-            await ctx.send(
+            await ctx.respond(
                 f"Here is your hint: **{hint_word}**\nDistance from the target word is approximately **{hint_distance}**."
             )
 
             # Increment the hint usage count
-            servers[guild_id][user_id] += 1
+            servers[guild_id][user_id]["hints"] += 1
         else:
             await ctx.send("Error fetching hint from Contexto API.")
     except Exception as e:
@@ -183,63 +180,68 @@ async def usehint(ctx: discord.ApplicationContext):
 
 # Function to handle daily game logic
 async def daily_game_logic():
-    global GAME_NUMBER, guesses_made, hint_usage, yesterdays_word, distance
+    global GAME_NUMBER, guesses_made, hint_usage, yesterdays_word, distance, servers
 
-    # Checks if a new day has started
-    if check_new_day():
-        yesterday_word = yesterdays_word  # Saves yesterday's word if needed
+    ## The game number of 30th October 2024 is 770
+    ## The game number increases by 1 each day
+    GAME_NUMBER = 770 + (datetime.now() - datetime(2024, 10, 30)).days
+    hint_usage.clear()  # Resets hint usage for all users
+    distance = 0
 
-        # Increment the game number
-        GAME_NUMBER = 770 + (datetime.now() - datetime(2024, 10, 30)).days
-        hint_usage.clear()  # Resets hint usage for all users
-        guesses_made = 0  # Resets guesses for the new day
-        distance = 0
-
-        # Informs users about the new game
-        for guild_id in servers:
-            channel = servers[guild_id]["notifications_channel"]
-            if channel is not None:
-                await channel.send(
-                    f"Today is a new day! The game number has increased to **{GAME_NUMBER}**.\n"
-                    f"Yesterday's word was **{yesterday_word}**.\n"
-                    f"Total guesses made: {guesses_made}.\n"
-                    f"You can now start guessing the new word!"
-                )
+    # Informs users about the new game
+    for guild_id in servers:
+        channel = servers[guild_id]["notifications_channel"]
+        if channel is not None:
+            await bot.get_channel(channel).send(
+                f"""
+                Today is a new day! The game number has increased to **{GAME_NUMBER}**.
+                You can now start guessing the new word!
+                """
+            )
 
 
 # Command to provide help and tips
-@bot.slash_command()
-async def guide(ctx):
-    help_message = (
-        "Welcome to the Guess the word Game!\n\n"
-        "**How to Play:**\n"
-        "1. The game starts with a secret word that you must guess.\n"
-        "2. Use the `!guess <your_word>` command to make a guess.\n"
-        "3. After each guess, you'll receive feedback on how far away your guess is from the secret word.\n"
-        "4. You can also use the `!hint` command to receive a hint about the word.\n\n"
-        "**Tips for Playing:**\n"
-        "- Start with common words to get a sense of the distance.\n"
-        "- Pay attention to the distance feedback to narrow down your guesses.\n"
-        "- Use hints wisely; you have a limited number of hints available per day.\n"
-        "- Keep track of your previous guesses to avoid repeating them.\n\n"
-        "Have fun, and good luck guessing the word!"
-    )
+@bot.slash_command(name="guide", description="Get help and tips for playing the game")
+async def guide(ctx: discord.ApplicationContext):
+    help_message = """
+        Welcome to the Guess the word Game!
 
-    await ctx.send(help_message)
+        **How to Play:**
+        1. The game starts with a secret word that you must guess.
+        2. Use the `/guess <your_word>` command to make a guess.
+        3. After each guess, you'll receive feedback on how far away your guess is from the secret word.
+        4. You can also use the `/hint` command to receive a hint about the word.
+
+        **Tips for Playing:**
+        - Start with common words to get a sense of the distance.
+        - Pay attention to the distance feedback to narrow down your guesses.
+        - Use hints wisely; you have a limited number of hints available per day.
+        - Keep track of your previous guesses to avoid repeating them.
+        Have fun, and good luck guessing the word!
+    """
+
+    await ctx.respond(help_message)
 
 
-@tasks.loop(seconds=10)
+@tasks.loop(hours=24)
 async def daily_game():
     await daily_game_logic()
 
 
-@bot.command()
-async def god(ctx: discord.Interaction):
+@bot.slash_command(name="god", description="Admin Command | Reveal the word")
+async def god(ctx: discord.ApplicationContext):
+    if not (ctx.author.guild_permissions.manage_channels):
+        await ctx.interaction.response.send_message(
+            content=f"You do not have access to this command", ephemeral=True
+        )
+        return
+
     answer = requests.get(f"https://api.contexto.me/machado/en/giveup/{GAME_NUMBER}")
     text = answer.json()["word"]
 
-    await ctx.send(f"The word was {text}")
+    await ctx.interaction.response.send_message(f"The word was {text}", ephemeral=True)
 
 
+daily_game.start()
 # Run the bot with your token
 bot.run(os.environ["discord_token"])
